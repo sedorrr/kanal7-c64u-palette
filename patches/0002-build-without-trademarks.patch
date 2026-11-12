@@ -1,0 +1,39 @@
+From 43adcf112fb09cef6a8bd22e7682fe4b4ea0b152 Mon Sep 17 00:00:00 2001
+From: KANAL 7 project <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 22:08:00 +0100
+Subject: [PATCH] Build without COMMERCIAL (no Commodore trademarks/branding)
+
+Spiffy_Ultimate switches the branded variant on with -DCOMMERCIAL=1; the code partly
+tests only whether COMMERCIAL is defined, so the define is removed completely.
+---
+ target/u64ii/riscv/kickstart/Makefile | 1 -
+ target/u64ii/riscv/ultimate/Makefile  | 1 -
+ 2 files changed, 2 deletions(-)
+
+diff --git a/target/u64ii/riscv/kickstart/Makefile b/target/u64ii/riscv/kickstart/Makefile
+index c0958999..07f4e6a3 100755
+--- a/target/u64ii/riscv/kickstart/Makefile
++++ b/target/u64ii/riscv/kickstart/Makefile
+@@ -118,7 +118,6 @@ SRCS_NANO = nano_minimal.nan
+ PATH_INC =  $(addprefix -I, $(VPATH))
+ OPTIONS  = -march=$(MARCH) -mabi=$(MABI) -gdwarf-2 -ffunction-sections -DRISCV -Os -DOS -DUSB2513 -DRISC=1 -DSAFEMODE=1 -DIOBASE=0x10000000 -DU2P_IO_BASE=0x10100000
+ OPTIONS += -DCLOCK_FREQ=100000000 -DU64=2 -Wno-write-strings -fdata-sections -nostartfiles -mno-fdiv -DRECOVERYAPP=1
+-OPTIONS += -DCOMMERCIAL=1
+ OPTIONS += -DKICKSTART=1
+ OPTIONS += -DCONFIRM_MSG=$(CONFIRM_MSG)
+ # Flash‑protection removal code should not be included in the Ultimate application binary.
+diff --git a/target/u64ii/riscv/ultimate/Makefile b/target/u64ii/riscv/ultimate/Makefile
+index 84a5a7a8..00048c63 100755
+--- a/target/u64ii/riscv/ultimate/Makefile
++++ b/target/u64ii/riscv/ultimate/Makefile
+@@ -223,7 +223,6 @@ SRCS_NANO = nano_minimal.nan
+ PATH_INC =  $(addprefix -I, $(VPATH))
+ OPTIONS  = -march=$(MARCH) -mabi=$(MABI) $(EFFORT) -ffunction-sections -fdata-sections -nostartfiles -mno-fdiv
+ OPTIONS += -gdwarf-2 -Os -DRISCV -DU64=2 -DUSB2513 -DOS -DIOBASE=0x10000000 -DU2P_IO_BASE=0x10100000 -DCLOCK_FREQ=100000000 -Wno-write-strings -DFP_SUPPORT=1
+-OPTIONS += -DCOMMERCIAL=1
+ # Flash‑protection removal code should not be included in the Ultimate application binary.
+ # So even if the application crashes, no code exists anywhere in memory that could
+ # accidentally disable the flash protection.
+-- 
+2.54.0 (Apple Git-157)
+

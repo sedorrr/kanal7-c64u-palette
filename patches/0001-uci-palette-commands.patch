@@ -1,0 +1,222 @@
+From 22a96b90a67cb633ec0f5ac4107c7474857e62fd Mon Sep 17 00:00:00 2001
+From: KANAL 7 project <noreply@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 18:32:39 +0100
+Subject: [PATCH] Add UCI palette commands $51-$54 (from 1541ultimate 3.15)
+
+GET_PALETTE ($04 $51), SET_PALETTE ($04 $52), SET_PALETTE_COLOR ($04 $53) and
+RESET_PALETTE ($04 $54), taken from Gideon Zweijtzer's 1541ultimate firmware 3.15
+(software/io/command_interface, software/u64/u64_config.cc). Same command format and
+replies as 3.15. Not included: palette flag in the video stream.
+---
+ .../io/command_interface/control_target.cc    | 45 ++++++++++++++++++
+ .../io/command_interface/control_target.h     |  4 ++
+ .../io/command_interface/palette_command.h    | 36 ++++++++++++++
+ software/u64/u64_config.cc                    | 47 +++++++++++++++++++
+ software/u64/u64_config.h                     |  3 ++
+ 5 files changed, 135 insertions(+)
+ create mode 100644 software/io/command_interface/palette_command.h
+
+diff --git a/software/io/command_interface/control_target.cc b/software/io/command_interface/control_target.cc
+index 7c65cc76..26018a3a 100644
+--- a/software/io/command_interface/control_target.cc
++++ b/software/io/command_interface/control_target.cc
+@@ -1,4 +1,5 @@
+ #include "control_target.h"
++#include "palette_command.h"
+ #include "disk_image.h"
+ #include <string.h>
+ #include <ctype.h>
+@@ -255,6 +256,50 @@ void ControlTarget :: parse_command(Message *command, Message **reply, Message *
+             *reply  = &c_message_empty;
+             *status = &c_status_ok;
+             break;
++
++        case CTRL_CMD_GET_PALETTE:
++            if (command->length != 2) {
++                *status = &c_status_invalid_params;
++            } else {
++                U64Config::get_palette_rgb((uint8_t (*)[3])data_message.message);
++                data_message.length = UCI_PALETTE_BYTES;
++                data_message.last_part = true;
++                *reply = &data_message;
++                *status = &c_status_ok;
++            }
++            break;
++
++        case CTRL_CMD_SET_PALETTE: {
++            uint8_t rgb[UCI_PALETTE_COLORS][3];
++            if (!decode_palette_set(command->message, command->length, rgb)) {
++                *status = &c_status_invalid_params;
++            } else {
++                U64Config::set_palette_rgb(rgb);
++                *status = &c_status_ok;
++            }
++            break;
++        }
++
++        case CTRL_CMD_SET_PALETTE_COLOR: {
++            uint8_t index;
++            uint8_t rgb[3];
++            if (!decode_palette_color_set(command->message, command->length, &index, rgb)) {
++                *status = &c_status_invalid_params;
++            } else {
++                U64Config::set_palette_color(index, rgb);
++                *status = &c_status_ok;
++            }
++            break;
++        }
++
++        case CTRL_CMD_RESET_PALETTE:
++            if (!valid_palette_reset(command->length)) {
++                *status = &c_status_invalid_params;
++            } else {
++                U64Config::reset_palette();
++                *status = &c_status_ok;
++            }
++            break;
+ #endif
+         case CTRL_CMD_EASYFLASH:
+             if (command->length < 3)
+diff --git a/software/io/command_interface/control_target.h b/software/io/command_interface/control_target.h
+index 7a3785d3..5fa3f5c4 100644
+--- a/software/io/command_interface/control_target.h
++++ b/software/io/command_interface/control_target.h
+@@ -24,6 +24,10 @@
+ #define CTRL_CMD_DISABLE_DISK_B 0x33
+ #define CTRL_CMD_DISK_A_POWER   0x34
+ #define CTRL_CMD_DISK_B_POWER   0x35
++#define CTRL_CMD_GET_PALETTE       0x51
++#define CTRL_CMD_SET_PALETTE       0x52
++#define CTRL_CMD_SET_PALETTE_COLOR 0x53
++#define CTRL_CMD_RESET_PALETTE     0x54
+ #define CTRL_CMD_GET_RAMDISKINFO   0x40
+ 
+ class ControlTarget : CommandTarget
+diff --git a/software/io/command_interface/palette_command.h b/software/io/command_interface/palette_command.h
+new file mode 100644
+index 00000000..43848075
+--- /dev/null
++++ b/software/io/command_interface/palette_command.h
+@@ -0,0 +1,36 @@
++#ifndef PALETTE_COMMAND_H
++#define PALETTE_COMMAND_H
++
++#include <stdint.h>
++#include <string.h>
++
++#define UCI_PALETTE_COLORS 16
++#define UCI_PALETTE_BYTES (UCI_PALETTE_COLORS * 3)
++
++static inline bool decode_palette_set(const uint8_t *message, int length,
++                                      uint8_t rgb[UCI_PALETTE_COLORS][3])
++{
++    if (!message || length != UCI_PALETTE_BYTES + 2) {
++        return false;
++    }
++    memcpy(rgb, message + 2, UCI_PALETTE_BYTES);
++    return true;
++}
++
++static inline bool decode_palette_color_set(const uint8_t *message, int length,
++                                            uint8_t *index, uint8_t rgb[3])
++{
++    if (!message || length != 6 || message[2] >= UCI_PALETTE_COLORS) {
++        return false;
++    }
++    *index = message[2];
++    memcpy(rgb, message + 3, 3);
++    return true;
++}
++
++static inline bool valid_palette_reset(int length)
++{
++    return length == 2;
++}
++
++#endif
+diff --git a/software/u64/u64_config.cc b/software/u64/u64_config.cc
+index 9c18462e..ef368db5 100755
+--- a/software/u64/u64_config.cc
++++ b/software/u64/u64_config.cc
+@@ -2342,10 +2342,18 @@ void U64Config :: list_palettes(ConfigItem *it, IndexedList<char *>& strings)
+     }
+ }
+ 
++// Kanal7: aktive Palette merken, damit GET_PALETTE und SET_PALETTE_COLOR (UCI $51-$54,
++// uebernommen aus 1541ultimate 3.15) auf dem Stand aufsetzen koennen.
++static uint8_t active_palette[16][3];
++static bool active_palette_valid = false;
++
+ void U64Config :: set_palette_rgb(const uint8_t rgb[16][3])
+ {
+     uint8_t yuv[16][3];
+ 
++    memcpy(active_palette, rgb, sizeof(active_palette));
++    active_palette_valid = true;
++
+     volatile uint8_t *rgb_registers = (volatile uint8_t *)C64_PALETTE;
+     for(int i=0; i<16; i++) {
+         *(rgb_registers++) = rgb[i][0];
+@@ -2368,6 +2376,45 @@ void U64Config :: set_palette_rgb(const uint8_t rgb[16][3])
+     set_palette_yuv(yuv);
+ }
+ 
++void U64Config :: get_palette_rgb(uint8_t rgb[16][3])
++{
++    memcpy(rgb, active_palette_valid ? active_palette : default_colors, sizeof(active_palette));
++}
++
++void U64Config :: set_palette_color(uint8_t index, const uint8_t rgb[3])
++{
++    if (index >= 16) {
++        return;
++    }
++    if (!active_palette_valid) {
++        memcpy(active_palette, default_colors, sizeof(active_palette));
++        active_palette_valid = true;
++    }
++    memcpy(active_palette[index], rgb, 3);
++
++    volatile uint8_t *rgb_registers = (volatile uint8_t *)(C64_PALETTE + index * 4);
++    rgb_registers[0] = rgb[0];
++    rgb_registers[1] = rgb[1];
++    rgb_registers[2] = rgb[2];
++#if U64 == 2
++    volatile uint8_t *rgb_registers_hdmi = (volatile uint8_t *)(U64II_HDMI_PALETTE + index * 4);
++    rgb_registers_hdmi[0] = rgb[0];
++    rgb_registers_hdmi[1] = rgb[1];
++    rgb_registers_hdmi[2] = rgb[2];
++#endif
++    uint8_t yuv[3];
++    rgb_to_yuv(rgb, yuv, false);
++    volatile uint8_t *yuv_registers = (volatile uint8_t *)(C64_PALETTE + 0x400 + index * 4);
++    yuv_registers[0] = yuv[0];
++    yuv_registers[1] = yuv[1];
++    yuv_registers[2] = yuv[2];
++}
++
++void U64Config :: reset_palette()
++{
++    set_palette_rgb(default_colors);
++}
++
+ void U64Config :: set_palette_yuv(const uint8_t yuv[16][3])
+ {
+     volatile uint8_t *yuv_registers = (volatile uint8_t *)(C64_PALETTE + 0x400);
+diff --git a/software/u64/u64_config.h b/software/u64/u64_config.h
+index aa206ee3..904f0595 100755
+--- a/software/u64/u64_config.h
++++ b/software/u64/u64_config.h
+@@ -151,6 +151,9 @@ public:
+     static void fix_splits(uint8_t *base, uint8_t *mask, uint8_t *split);
+     static void list_palettes(ConfigItem *it, IndexedList<char *>& strings);
+     static void set_palette_rgb(const uint8_t rgb[16][3]);
++    static void get_palette_rgb(uint8_t rgb[16][3]);
++    static void set_palette_color(uint8_t index, const uint8_t rgb[3]);
++    static void reset_palette();
+     static void set_palette_yuv(const uint8_t yuv[16][3]);
+     static void rgb_to_yuv(const uint8_t rgb[3], uint8_t yuv[3], bool ntsc);
+     static bool load_palette_vpl(const char *path, const char *filename);
+-- 
+2.54.0 (Apple Git-157)
+
